@@ -1,6 +1,6 @@
 [project]
 name = "voicetransclipper"
-version = "0.2.0"
+version = "0.3.0"
 description = "Add a short description here"
 authors = [{ name = "naari3", email = "naari.named@gmail.com" }]
 dependencies = [
@@ -19,6 +19,9 @@ dependencies = [
     "torchvision>=0.20.1",
     "torchaudio>=2.5.1",
     "transformers>=4.46.3",
+    "datasets>=3.1.0",
+    "librosa>=0.10.2.post1",
+    "tqdm>=4.67.1",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
