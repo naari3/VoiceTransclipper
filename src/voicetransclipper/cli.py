@@ -1,8 +1,9 @@
 from __future__ import annotations
 import csv
 import itertools
+import shutil
+import time
 
-from faster_whisper import WhisperModel
 import torch
 from transformers import pipeline, Pipeline
 from transformers.pipelines.pt_utils import KeyDataset
@@ -11,14 +12,21 @@ from datasets import load_dataset
 from pydub import AudioSegment, effects
 from pydub.silence import detect_nonsilent
 
+from audio_separator.separator import Separator
+
 import os
 import glob
 import errno
 from tqdm.auto import tqdm
 
+from yt_dlp.utils import sanitize_filename
+
 import fire
 
-from yt_dlp.utils import sanitize_filename
+import logging
+from tqdm.contrib.logging import logging_redirect_tqdm
+
+LOG = logging.getLogger(__name__)
 
 
 def pairwise(iterable):
@@ -143,11 +151,10 @@ def transcribe_chunks(
         #         else:
         #             out_text += " " + segment.text
         output_file_paths.append(out_file_path)
-
+    LOG.info(f"files: {len(output_file_paths)} {output_file_paths}")
     dataset = load_dataset(
         "audiofolder", data_files=output_file_paths, split="train", cache_dir="./cache"
     )
-    print(f"files: {len(output_file_paths)}")
 
     for i, out in enumerate(
         tqdm(
@@ -179,14 +186,7 @@ def transcribe_chunks(
         # 音声ファイルリネーム
         new_filename = sanitize_filename(f"{format(i + 1, fmt)}_{out_text}.wav")
         new_filename = os.path.join(dirname, new_filename)
-        os.replace(out_file_path, new_filename)
-
-        # pro_bar = ("=" * ((i + 1) * 20 // file_num)) + (
-        #     " " * (20 - (i + 1) * 20 // file_num)
-        # )
-        # print("\r[{0}] {1}/{2} {3}".format(pro_bar, i + 1, file_num, out_text), end="")
-
-    print("")
+        replace(out_file_path, new_filename)
 
     return result_list
 
@@ -199,8 +199,47 @@ def export_result_csv(csv_file_path, result_list):
         writer.writerows(result_list)
 
 
+def replace(src: str, dst: str):
+    if os.path.exists(dst):
+        os.remove(dst)
+    shutil.move(src, dst)
+
+
+def audio_separate(file_path: str, separator: Separator):
+    filename_without_ext = os.path.splitext(os.path.basename(file_path))[0]
+    file_dir = os.path.dirname(file_path)
+
+    # https://github.com/fsspec/filesystem_spec/issues/838 の問題により、ファイル名に[]が含まれると一覧として認識されないため、除去
+    vocals_file_path = (
+        os.path.join(file_dir, f"{filename_without_ext}_vocals.wav")
+        .replace("[", "")
+        .replace("]", "")
+    )
+    instrumental_file_path = (
+        os.path.join(file_dir, f"{filename_without_ext}_instrumental.wav")
+        .replace("[", "")
+        .replace("]", "")
+    )
+
+    files = separator.separate(
+        file_path,
+        {
+            "Vocals": f"{filename_without_ext}_vocals.wav",
+            "Instrumental": f"{filename_without_ext}_instrumental.wav",
+        },
+    )
+    replace(files[0], instrumental_file_path)
+    replace(files[1], vocals_file_path)
+    return {
+        "Vocals": vocals_file_path,
+        "Instrumental": instrumental_file_path,
+    }
+
+
 def cli(
     file_path: str,
+    audio_separation: bool = True,
+    audio_separator_model: str = "model_bs_roformer_ep_317_sdr_12.9755.ckpt",
     min_silence_len: int = 200,
     silence_thresh: int = -40,
     keep_silence: int = 500,
@@ -211,8 +250,37 @@ def cli(
     no_speech_prob_thresh: float = 0.95,
     initial_prompt: str = "",
 ):
-    # model_size = "turbo"
-    # model = WhisperModel(model_size, device="cuda", compute_type="float16")
+    start = time.perf_counter()
+    files = glob.glob(file_path)
+
+    if len(files) == 0:
+        if not os.path.exists(file_path):
+            LOG.error(
+                "指定したファイルが見つかりません。FILE_PATHの値を確認してください"
+            )
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), file_path)
+        files.append(file_path)
+
+    LOG.info("音声ファイル数:", len(files))
+    for filepath in files:
+        LOG.info(f"\t- {os.path.basename(filepath)}")
+
+    vocal_file_paths = []
+    if audio_separation:
+        LOG.info("音声分離モデル読み込み中...")
+        separator = Separator()
+        separator.load_model(audio_separator_model)
+
+        LOG.info("音声分離中...")
+        for filepath in tqdm(files):
+            outputs = audio_separate(filepath, separator)
+            vocal_file_path = outputs["Vocals"]
+            vocal_file_paths.append(vocal_file_path)
+        del separator
+        LOG.info("音声分離完了")
+    else:
+        vocal_file_paths = files
+
     generate_kwargs = {
         "language": "Japanese",
         "no_repeat_ngram_size": 0,
@@ -227,28 +295,15 @@ def cli(
         batch_size=64,
     )
 
-    # globが渡された場合
-    files = glob.glob(file_path)
-
-    # フォルダ内に.wavファイルがない場合
-    if len(files) == 0:
-        # ファイルがない場合
-        if not os.path.exists(file_path):
-            print("指定したファイルが見つかりません。FILE_PATHの値を確認してください")
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), file_path)
-        files.append(file_path)
-
-    print("音声ファイル数:", len(files))
-    for filepath in files:
-        print("\t-", os.path.basename(filepath))
-
-    for filepath in tqdm(files):
+    for filepath in tqdm(vocal_file_paths):
         dirname = os.path.dirname(filepath)
         basename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
-        print("Filename:", os.path.basename(filepath))
+        LOG.info(f"Filename: {os.path.basename(filepath)}")
+        LOG.info("音声ファイル分割中...")
         chunks, voice_range = clip_wav_file_to_chunks(
             filepath, min_silence_len, silence_thresh, keep_silence
         )
+        LOG.info("音声ファイル文字起こし中...")
         results = transcribe_chunks(
             chunks=chunks,
             voice_range=voice_range,
@@ -268,9 +323,14 @@ def cli(
         csv_file_path = f"{dirname}/{basename_no_ext}_result.csv"
         export_result_csv(csv_file_path, results)
 
+    end = time.perf_counter()
+    LOG.info(f"完了: {(end - start)/60:.2f}分")
+
 
 def main():
-    fire.Fire(cli)
+    logging.basicConfig(level=logging.INFO)
+    with logging_redirect_tqdm():
+        fire.Fire(cli)
 
 
 if __name__ == "__main__":

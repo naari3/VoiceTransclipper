@@ -15,16 +15,18 @@ dependencies = [
     # # avobe
     # "librosa==0.9.2",
     # "numpy<1.24.0",
-    "torch>=2.5.1",
-    "torchvision>=0.20.1",
-    "torchaudio>=2.5.1",
     "transformers>=4.46.3",
     "datasets>=3.1.0",
     "librosa>=0.10.2.post1",
     "tqdm>=4.67.1",
+    "audio-separator[gpu]==0.28.2",
+    "torch==2.4.1+cu118",
+    "torchvision>=0.19.0",
+    "torchaudio>=2.4.0",
+    "onnxruntime-gpu>=1.20.1",
 ]
 readme = "README.md"
-requires-python = ">= 3.8"
+requires-python = ">= 3.11"
 
 [build-system]
 requires = ["hatchling"]
@@ -34,10 +36,13 @@ build-backend = "hatchling.build"
 managed = true
 dev-dependencies = ["black>=23.3.0"]
 
-[[tool.rye.source]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cu118"
-priority = "explicit"
-
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch" }]

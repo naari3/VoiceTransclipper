@@ -1,7 +1,7 @@
 import glob
 import torch
 from transformers import pipeline
-from datasets import load_dataset, Audio
+from datasets import load_dataset
 from transformers.pipelines.pt_utils import KeyDataset
 from tqdm.auto import tqdm
 
@@ -20,8 +20,8 @@ pipe = pipeline(
     batch_size=64,
 )
 
-# globが渡された場合
-files = glob.glob(r"F:\UVRs\ひだまりスケッチ\ひだまりスケッチ - 01_(Vocals) large-v2\*")
+files = glob.glob(r"F:\UVRs\ひだまりスケッチ\ひだまりスケッチ - 01_(Vocals)\*")
+print(files)
 
 dataset = load_dataset(
     "audiofolder", data_files=files, split="train", cache_dir="./cache"
